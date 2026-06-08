@@ -19,9 +19,8 @@ Requires an internet connection on first load (fetches React + Recharts from unp
 
 ## Assumptions / limitations
 
-- **Single currency**: USD. All amounts are treated as dollars.
 - **Persistence**: localStorage only — data is local to this browser. Clearing browser data removes everything.
 - **No accounts / multi-device sync**.
-- **Custom split** is by dollar amount, not percentage.
+- **Custom split** is by amount, not percentage.
 - **Member removal** is blocked if the member has any expense or settlement reference — delete their expenses first.
 - **Rounding**: equal splits are rounded to 2 decimal places; the rounding penny is assigned to the payer.
