@@ -1,0 +1,1543 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SplitEase — Shared Expense Tracker</title>
+
+  <!-- React 18 -->
+  <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+
+  <!-- Babel (JSX in browser) -->
+  <script src="https://unpkg.com/@babel/standalone@7.24.0/babel.min.js"></script>
+
+  <!-- Recharts (needs prop-types) -->
+  <script src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
+  <script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: #f0f4ff;
+      color: #1e293b;
+      min-height: 100vh;
+    }
+
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 99px; }
+
+    button { font-family: inherit; }
+    input, select, textarea { font-family: inherit; }
+
+    input:focus, select:focus { outline: 2px solid #6366f1; outline-offset: 1px; }
+
+    @keyframes slideDown {
+      from { opacity: 0; transform: translateY(-8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to   { opacity: 1; }
+    }
+    @keyframes slideUp {
+      from { opacity: 0; transform: translateY(20px) scale(0.97); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    @keyframes popIn {
+      0%   { opacity: 0; transform: scale(0.8); }
+      60%  { transform: scale(1.05); }
+      100% { opacity: 1; transform: scale(1); }
+    }
+    @keyframes shimmer {
+      0%   { background-position: -200% 0; }
+      100% { background-position: 200% 0; }
+    }
+
+    .folder-card:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 8px 32px rgba(99,102,241,0.13) !important;
+    }
+    .expense-item:hover { background: #f8fafc; }
+    .btn-primary:hover  { opacity: 0.88; transform: translateY(-1px); }
+    .btn-danger:hover   { opacity: 0.88; }
+    .icon-btn:hover     { background: #f1f5f9 !important; }
+    .tab-btn:hover      { color: #6366f1 !important; }
+    .debt-suggestion:hover { background: #dcfce7 !important; }
+
+    @media (max-width: 600px) {
+      .summary-cards { grid-template-columns: 1fr 1fr !important; }
+      .folder-grid   { grid-template-columns: 1fr !important; }
+      .form-row      { flex-direction: column !important; }
+      .folder-header-actions { flex-direction: column; align-items: flex-start !important; }
+    }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useMemo, useRef } = React;
+const {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+  PieChart, Pie, Cell, LineChart, Line, ResponsiveContainer
+} = Recharts;
+
+/* ─────────────────────────── Constants ─────────────────────────── */
+const MEMBER_COLORS = [
+  '#6366f1','#ec4899','#f59e0b','#10b981','#3b82f6',
+  '#8b5cf6','#ef4444','#14b8a6','#f97316','#84cc16',
+];
+
+const CATEGORIES = [
+  { name:'Food & Drink', icon:'🍕' },
+  { name:'Travel',       icon:'✈️' },
+  { name:'Accommodation',icon:'🏨' },
+  { name:'Shopping',     icon:'🛍️' },
+  { name:'Entertainment',icon:'🎮' },
+  { name:'Utilities',    icon:'💡' },
+  { name:'Health',       icon:'💊' },
+  { name:'Transport',    icon:'🚗' },
+  { name:'Other',        icon:'📝' },
+];
+
+const FOLDER_ICONS = ['✈️','🏠','🏢','🎉','🍕','🚗','🏖️','🎮','💼','🎓','🏋️','💒','🌴','🎸','⛷️','🐾'];
+
+const FOLDER_COLORS = [
+  '#6366f1','#8b5cf6','#ec4899','#f59e0b',
+  '#10b981','#3b82f6','#ef4444','#14b8a6','#f97316',
+];
+
+const CHART_COLORS = ['#6366f1','#ec4899','#f59e0b','#10b981','#3b82f6','#8b5cf6','#ef4444','#14b8a6'];
+
+const CURRENCIES = [
+  { code:'USD', symbol:'$',   name:'US Dollar' },
+  { code:'INR', symbol:'₹',   name:'Indian Rupee' },
+  { code:'EUR', symbol:'€',   name:'Euro' },
+  { code:'GBP', symbol:'£',   name:'British Pound' },
+  { code:'JPY', symbol:'¥',   name:'Japanese Yen' },
+  { code:'AUD', symbol:'A$',  name:'Australian Dollar' },
+  { code:'CAD', symbol:'C$',  name:'Canadian Dollar' },
+  { code:'SGD', symbol:'S$',  name:'Singapore Dollar' },
+  { code:'AED', symbol:'د.إ', name:'UAE Dirham' },
+  { code:'CHF', symbol:'Fr',  name:'Swiss Franc' },
+  { code:'MXN', symbol:'MX$', name:'Mexican Peso' },
+  { code:'BRL', symbol:'R$',  name:'Brazilian Real' },
+];
+
+/* ─────────────────────────── Currency context ─────────────────── */
+const CurrencyCtx = React.createContext('$');
+/** Returns a formatter function bound to the active currency symbol */
+const useFmt = () => {
+  const sym = React.useContext(CurrencyCtx);
+  return (n) => `${sym}${Math.abs(n).toFixed(2)}`;
+};
+
+/* ─────────────────────────── Utilities ─────────────────────────── */
+const uid = () => Math.random().toString(36).slice(2, 10);
+
+/** Fallback fmt used outside React components (e.g. module-level helpers) */
+const fmt  = (n) => `${Math.abs(n).toFixed(2)}`;
+
+const fmtDate = (d) =>
+  new Date(d).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' });
+
+/** Returns an emoji for known CATEGORIES; defaults to 📝 for custom names */
+const catIcon = (name) => (CATEGORIES.find(c => c.name === name) || { icon:'📝' }).icon;
+
+/* ─────────────────────── localStorage helpers ───────────────────── */
+const STORE_KEY = 'splitease-v2';
+
+const loadStore = () => {
+  try {
+    const s = JSON.parse(localStorage.getItem(STORE_KEY));
+    return s ? { currency:'USD', ...s } : { folders:[], currency:'USD' };
+  }
+  catch { return { folders:[], currency:'USD' }; }
+};
+const saveStore = (d) => localStorage.setItem(STORE_KEY, JSON.stringify(d));
+
+/* ─────────────────────── Balance engine ────────────────────────── */
+/**
+ * Returns { memberId: number } where
+ *   positive → person is owed money (paid more than share)
+ *   negative → person owes money   (paid less than share)
+ */
+const computeBalances = ({ members, expenses, settlements }) => {
+  const bal = {};
+  members.forEach(m => { bal[m.id] = 0; });
+
+  expenses.forEach(exp => {
+    bal[exp.paidBy] = (bal[exp.paidBy] || 0) + exp.amount;        // credit payer
+    exp.splits.forEach(s => {
+      bal[s.memberId] = (bal[s.memberId] || 0) - s.amount;         // debit each share
+    });
+  });
+
+  settlements.forEach(s => {
+    bal[s.from] = (bal[s.from] || 0) + s.amount;  // payer's debt reduces → balance rises
+    bal[s.to]   = (bal[s.to]   || 0) - s.amount;  // receiver's credit reduces → balance drops
+  });
+
+  return bal;
+};
+
+/** Greedy debt-simplification: returns [{from, to, amount}] */
+const simplifyDebts = (bal, members) => {
+  const map = Object.fromEntries(members.map(m => [m.id, m]));
+  const pos = members.filter(m => bal[m.id] >  0.005).map(m => ({ id:m.id, amt: bal[m.id] })).sort((a,b) => b.amt-a.amt);
+  const neg = members.filter(m => bal[m.id] < -0.005).map(m => ({ id:m.id, amt:-bal[m.id] })).sort((a,b) => b.amt-a.amt);
+  const debts = [];
+  let i=0, j=0;
+  while (i < pos.length && j < neg.length) {
+    const pay = Math.min(pos[i].amt, neg[j].amt);
+    debts.push({ from:neg[j].id, fromName:map[neg[j].id]?.name, to:pos[i].id, toName:map[pos[i].id]?.name, amount:+pay.toFixed(2) });
+    pos[i].amt -= pay; neg[j].amt -= pay;
+    if (pos[i].amt < 0.005) i++;
+    if (neg[j].amt < 0.005) j++;
+  }
+  return debts;
+};
+
+const isSettled = (folder) =>
+  Object.values(computeBalances(folder)).every(b => Math.abs(b) < 0.01);
+
+/* ─────────────────────────── Equal split ───────────────────────── */
+const equalSplits = (amount, memberIds, payerId) => {
+  if (!memberIds.length) return [];
+  const share = +(amount / memberIds.length).toFixed(2);
+  const splits = memberIds.map(id => ({ memberId:id, amount:share }));
+  // fix rounding penny on payer
+  const total = splits.reduce((s,x) => s+x.amount, 0);
+  const diff  = +(amount - total).toFixed(2);
+  const payerSplit = splits.find(s => s.memberId === payerId) || splits[0];
+  payerSplit.amount = +(payerSplit.amount + diff).toFixed(2);
+  return splits;
+};
+
+/* ═══════════════════════════ Components ════════════════════════════ */
+
+/* ── Toast ── */
+const Toast = ({ msg, type }) => {
+  if (!msg) return null;
+  return (
+    <div style={{
+      position:'fixed', top:20, right:20, zIndex:9999,
+      background: type==='error' ? '#ef4444' : '#10b981',
+      color:'#fff', borderRadius:12, padding:'12px 22px',
+      fontWeight:600, fontSize:14,
+      boxShadow:'0 8px 24px rgba(0,0,0,0.18)',
+      animation:'slideDown 0.25s ease',
+    }}>{msg}</div>
+  );
+};
+
+/* ── Modal shell ── */
+const Modal = ({ title, onClose, children, wide }) => (
+  <div
+    onClick={e => e.target === e.currentTarget && onClose()}
+    style={{
+      position:'fixed', inset:0, background:'rgba(15,23,42,0.55)',
+      display:'flex', alignItems:'center', justifyContent:'center',
+      zIndex:1000, padding:16, animation:'fadeIn 0.2s ease',
+    }}
+  >
+    <div style={{
+      background:'#fff', borderRadius:20, width:'100%',
+      maxWidth: wide ? 640 : 520, maxHeight:'92vh', overflow:'auto',
+      boxShadow:'0 24px 80px rgba(0,0,0,0.25)',
+      animation:'slideUp 0.3s ease',
+    }}>
+      <div style={{
+        display:'flex', justifyContent:'space-between', alignItems:'center',
+        padding:'20px 24px', borderBottom:'1px solid #f1f5f9', position:'sticky', top:0, background:'#fff', zIndex:1, borderRadius:'20px 20px 0 0',
+      }}>
+        <h2 style={{ fontSize:18, fontWeight:700, color:'#1e293b' }}>{title}</h2>
+        <button onClick={onClose} className="icon-btn" style={{
+          background:'none', border:'none', cursor:'pointer', fontSize:20,
+          color:'#94a3b8', width:36, height:36, borderRadius:8,
+          display:'flex', alignItems:'center', justifyContent:'center',
+        }}>✕</button>
+      </div>
+      <div style={{ padding:'22px 24px' }}>{children}</div>
+    </div>
+  </div>
+);
+
+/* ── Label + Input helpers ── */
+const Label = ({ children }) => (
+  <label style={{ display:'block', fontSize:13, fontWeight:600, color:'#475569', marginBottom:6 }}>
+    {children}
+  </label>
+);
+
+const Input = ({ style, ...props }) => (
+  <input
+    style={{
+      width:'100%', padding:'10px 13px', border:'1.5px solid #e2e8f0',
+      borderRadius:10, fontSize:14, color:'#1e293b', background:'#fff',
+      transition:'border-color 0.15s',
+      ...style,
+    }}
+    {...props}
+  />
+);
+
+const Select = ({ children, style, ...props }) => (
+  <select
+    style={{
+      width:'100%', padding:'10px 13px', border:'1.5px solid #e2e8f0',
+      borderRadius:10, fontSize:14, color:'#1e293b', background:'#fff',
+      cursor:'pointer',
+      ...style,
+    }}
+    {...props}
+  >{children}</select>
+);
+
+/* ─────────────────────── Avatar ─────────────────────── */
+const Avatar = ({ name='?', color='#6366f1', size=32, style={} }) => (
+  <div style={{
+    width:size, height:size, borderRadius:'50%', background:color,
+    display:'flex', alignItems:'center', justifyContent:'center',
+    fontSize: size*0.4, fontWeight:700, color:'#fff', flexShrink:0,
+    border:'2px solid #fff', ...style,
+  }}>
+    {(name[0]||'?').toUpperCase()}
+  </div>
+);
+
+/* ════════════════════ Add / Edit Folder Modal ════════════════════ */
+const AddFolderModal = ({ onClose, onSave, existing }) => {
+  const [name,    setName]    = useState(existing?.name  || '');
+  const [icon,    setIcon]    = useState(existing?.icon  || '✈️');
+  const [color,   setColor]   = useState(existing?.color || '#6366f1');
+  const [members, setMembers] = useState(
+    existing?.members || [
+      { id:uid(), name:'', color: MEMBER_COLORS[0] },
+      { id:uid(), name:'', color: MEMBER_COLORS[1] },
+    ]
+  );
+  const [error, setError] = useState('');
+
+  const addMember = () =>
+    setMembers(p => [...p, { id:uid(), name:'', color: MEMBER_COLORS[p.length % MEMBER_COLORS.length] }]);
+
+  const updateName = (id, val) =>
+    setMembers(p => p.map(m => m.id===id ? {...m, name:val} : m));
+
+  const removeMember = (id) =>
+    setMembers(p => p.length > 2 ? p.filter(m => m.id!==id) : p);
+
+  const handleSave = () => {
+    if (!name.trim()) { setError('Folder name is required'); return; }
+    if (!existing) {
+      const valid = members.filter(m => m.name.trim());
+      if (valid.length < 2) { setError('Add at least 2 members'); return; }
+      onSave({ name:name.trim(), icon, color, members:valid });
+    } else {
+      onSave({ name:name.trim(), icon, color });
+    }
+    onClose();
+  };
+
+  return (
+    <Modal title={existing ? 'Edit Folder' : 'New Expense Folder'} onClose={onClose}>
+      {error && <p style={{ color:'#ef4444', fontSize:13, marginBottom:12, background:'#fef2f2', padding:'8px 12px', borderRadius:8 }}>{error}</p>}
+
+      {/* Name */}
+      <div style={{ marginBottom:18 }}>
+        <Label>Folder Name</Label>
+        <Input value={name} onChange={e => { setName(e.target.value); setError(''); }} placeholder="e.g. Goa Trip, Office Lunch…" />
+      </div>
+
+      {/* Icon */}
+      <div style={{ marginBottom:18 }}>
+        <Label>Icon</Label>
+        <div style={{ display:'flex', flexWrap:'wrap', gap:8 }}>
+          {FOLDER_ICONS.map(ic => (
+            <button key={ic} onClick={() => setIcon(ic)} style={{
+              width:44, height:44, fontSize:22, border:`2px solid ${icon===ic ? '#6366f1':'#e2e8f0'}`,
+              borderRadius:10, background: icon===ic ? '#ede9fe':'#f8fafc',
+              cursor:'pointer', transition:'all 0.15s',
+            }}>{ic}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* Color */}
+      <div style={{ marginBottom:22 }}>
+        <Label>Color</Label>
+        <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
+          {FOLDER_COLORS.map(c => (
+            <button key={c} onClick={() => setColor(c)} style={{
+              width:30, height:30, borderRadius:'50%', background:c, border:'none', cursor:'pointer',
+              outline: color===c ? `3px solid ${c}` : '3px solid transparent',
+              outlineOffset:3, transition:'all 0.15s', transform: color===c ? 'scale(1.15)':'scale(1)',
+            }} />
+          ))}
+        </div>
+      </div>
+
+      {/* Members — only shown when creating, not editing (editing uses ManageMembersModal) */}
+      {!existing && (
+        <div style={{ marginBottom:22 }}>
+          <Label>Members</Label>
+          {members.map((m, i) => (
+            <div key={m.id} style={{ display:'flex', gap:8, alignItems:'center', marginBottom:8 }}>
+              <Avatar name={m.name||'?'} color={m.color} size={32} />
+              <Input
+                value={m.name}
+                onChange={e => updateName(m.id, e.target.value)}
+                placeholder={`Member ${i+1}`}
+                style={{ flex:1 }}
+              />
+              {members.length > 2 && (
+                <button onClick={() => removeMember(m.id)} className="icon-btn" style={{
+                  background:'none', border:'none', cursor:'pointer',
+                  color:'#94a3b8', fontSize:18, padding:'0 4px',
+                }}>✕</button>
+              )}
+            </div>
+          ))}
+          <button onClick={addMember} style={{
+            width:'100%', padding:'9px', border:'1.5px dashed #d1d5db',
+            borderRadius:10, background:'none', color:'#6366f1',
+            fontSize:13, fontWeight:600, cursor:'pointer', marginTop:4,
+          }}>+ Add Member</button>
+        </div>
+      )}
+
+      <div style={{ display:'flex', gap:10, justifyContent:'flex-end', paddingTop:16, borderTop:'1px solid #f1f5f9' }}>
+        <button onClick={onClose} style={{
+          padding:'10px 22px', border:'none', borderRadius:10,
+          background:'#f1f5f9', color:'#475569', fontWeight:600, cursor:'pointer', fontSize:14,
+        }}>Cancel</button>
+        <button onClick={handleSave} className="btn-primary" style={{
+          padding:'10px 22px', border:'none', borderRadius:10,
+          background:'linear-gradient(135deg,#6366f1,#8b5cf6)',
+          color:'#fff', fontWeight:600, cursor:'pointer', fontSize:14,
+          transition:'all 0.15s',
+        }}>
+          {existing ? 'Save Changes' : 'Create Folder'}
+        </button>
+      </div>
+    </Modal>
+  );
+};
+
+/* ════════════════════ Add / Edit Expense Modal ════════════════════ */
+const AddExpenseModal = ({ folder, expense, onClose, onSave }) => {
+  const fmt        = useFmt();
+  const today = new Date().toISOString().split('T')[0];
+  const [desc,     setDesc]     = useState(expense?.description || '');
+  const [amount,   setAmount]   = useState(expense?.amount?.toString() || '');
+  const [paidBy,   setPaidBy]   = useState(expense?.paidBy || folder.members[0]?.id || '');
+  const [date,     setDate]     = useState(expense?.date   || today);
+
+  // If editing category is not in CATEGORIES list → treat as custom
+  const isKnown = CATEGORIES.some(c => c.name === (expense?.category || 'Other'));
+  const [category,    setCategory]    = useState(isKnown ? (expense?.category || 'Other') : '__custom__');
+  const [customCat,   setCustomCat]   = useState(!isKnown ? (expense?.category || '') : '');
+
+  const [splitMode,setSplitMode]= useState('equal');  // 'equal' | 'custom'
+  const [custom,   setCustom]   = useState(() => {
+    const m = {};
+    folder.members.forEach(mem => { m[mem.id] = ''; });
+    return m;
+  });
+  const [error, setError] = useState('');
+
+  // If editing, pre-fill split type
+  useEffect(() => {
+    if (!expense) return;
+    const total = expense.amount;
+    const n = folder.members.length;
+    const share = +(total/n).toFixed(2);
+    const isEqual = expense.splits.length === n && expense.splits.every(s => Math.abs(s.amount - share) < 0.02);
+    if (!isEqual) {
+      setSplitMode('custom');
+      const m = {};
+      folder.members.forEach(mem => { m[mem.id] = ''; });
+      expense.splits.forEach(s => { m[s.memberId] = s.amount.toString(); });
+      setCustom(m);
+    }
+  }, []);
+
+  const totalAmt   = parseFloat(amount) || 0;
+  const customTot  = Object.values(custom).reduce((s,v) => s+(parseFloat(v)||0), 0);
+  const customDiff = +(totalAmt - customTot).toFixed(2);
+
+  const getSplits = () => {
+    if (splitMode === 'equal') {
+      return equalSplits(totalAmt, folder.members.map(m=>m.id), paidBy);
+    }
+    return Object.entries(custom)
+      .filter(([,v]) => parseFloat(v) > 0)
+      .map(([memberId,v]) => ({ memberId, amount:+parseFloat(v).toFixed(2) }));
+  };
+
+  const resolvedCategory = category === '__custom__' ? (customCat.trim() || 'Other') : category;
+
+  const handleSave = () => {
+    setError('');
+    if (!desc.trim())    { setError('Description is required'); return; }
+    if (totalAmt <= 0)   { setError('Enter a valid amount'); return; }
+    if (category === '__custom__' && !customCat.trim()) { setError('Enter a custom category name'); return; }
+    if (splitMode==='custom' && Math.abs(customDiff) > 0.01) {
+      setError(`Custom splits (${fmt(customTot)}) must equal total (${fmt(totalAmt)})`); return;
+    }
+    onSave({ description:desc.trim(), amount:totalAmt, paidBy, date, category:resolvedCategory, splits:getSplits() });
+  };
+
+  const setCustomVal = (id, val) => setCustom(p => ({...p, [id]:val}));
+
+  const memberMap = Object.fromEntries(folder.members.map(m=>[m.id,m]));
+
+  return (
+    <Modal title={expense ? 'Edit Expense' : 'Add Expense'} onClose={onClose} wide>
+      {error && <p style={{ color:'#ef4444', fontSize:13, marginBottom:12, background:'#fef2f2', padding:'8px 12px', borderRadius:8 }}>{error}</p>}
+
+      {/* Description */}
+      <div style={{ marginBottom:16 }}>
+        <Label>Description</Label>
+        <Input value={desc} onChange={e=>setDesc(e.target.value)} placeholder="What was this expense for?" />
+      </div>
+
+      {/* Amount + Date */}
+      <div className="form-row" style={{ display:'flex', gap:14, marginBottom:16 }}>
+        <div style={{ flex:1 }}>
+          <Label>Amount ({React.useContext(CurrencyCtx)})</Label>
+          <Input type="number" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0.00" min="0" step="0.01" />
+        </div>
+        <div style={{ flex:1 }}>
+          <Label>Date</Label>
+          <Input type="date" value={date} onChange={e=>setDate(e.target.value)} />
+        </div>
+      </div>
+
+      {/* Paid by + Category */}
+      <div className="form-row" style={{ display:'flex', gap:14, marginBottom:20 }}>
+        <div style={{ flex:1 }}>
+          <Label>Paid By</Label>
+          <Select value={paidBy} onChange={e=>setPaidBy(e.target.value)}>
+            {folder.members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+          </Select>
+        </div>
+        <div style={{ flex:1 }}>
+          <Label>Category</Label>
+          <Select value={category} onChange={e=>setCategory(e.target.value)}>
+            {CATEGORIES.map(c => <option key={c.name} value={c.name}>{c.icon} {c.name}</option>)}
+            <option value="__custom__">✏️ Custom…</option>
+          </Select>
+          {category === '__custom__' && (
+            <Input
+              value={customCat}
+              onChange={e=>setCustomCat(e.target.value)}
+              placeholder="e.g. Gym, Groceries, Fuel…"
+              style={{ marginTop:8 }}
+            />
+          )}
+        </div>
+      </div>
+
+      {/* Split mode toggle */}
+      <div style={{ marginBottom:14 }}>
+        <Label>Split Method</Label>
+        <div style={{ display:'flex', gap:8, marginBottom:12 }}>
+          {[['equal','⚖️ Equal'],['custom','✏️ Custom']].map(([mode,label]) => (
+            <button key={mode} onClick={() => setSplitMode(mode)} style={{
+              flex:1, padding:'9px', border:`2px solid ${splitMode===mode?'#6366f1':'#e2e8f0'}`,
+              borderRadius:10, background: splitMode===mode ? '#ede9fe':'#f8fafc',
+              color: splitMode===mode ? '#6366f1':'#64748b',
+              fontWeight:600, fontSize:14, cursor:'pointer', transition:'all 0.15s',
+            }}>{label}</button>
+          ))}
+        </div>
+
+        {/* Split preview / inputs */}
+        <div style={{ background:'#f8fafc', borderRadius:12, padding:14 }}>
+          {splitMode==='equal' && totalAmt > 0 && (
+            equalSplits(totalAmt, folder.members.map(m=>m.id), paidBy).map(sp => {
+              const mem = memberMap[sp.memberId];
+              return (
+                <div key={sp.memberId} style={{ display:'flex', alignItems:'center', gap:10, marginBottom:8 }}>
+                  <Avatar name={mem?.name} color={mem?.color} size={28} />
+                  <span style={{ flex:1, fontSize:14, color:'#475569', fontWeight:500 }}>{mem?.name}</span>
+                  <span style={{ fontSize:14, fontWeight:700, color:'#1e293b' }}>{fmt(sp.amount)}</span>
+                </div>
+              );
+            })
+          )}
+          {splitMode==='equal' && totalAmt <= 0 && (
+            <p style={{ fontSize:13, color:'#94a3b8', textAlign:'center' }}>Enter an amount to preview split</p>
+          )}
+
+          {splitMode==='custom' && (
+            <>
+              {folder.members.map(mem => (
+                <div key={mem.id} style={{ display:'flex', alignItems:'center', gap:10, marginBottom:8 }}>
+                  <Avatar name={mem.name} color={mem.color} size={28} />
+                  <span style={{ flex:1, fontSize:14, color:'#475569', fontWeight:500 }}>{mem.name}</span>
+                  <Input
+                    type="number" min="0" step="0.01"
+                    value={custom[mem.id]||''}
+                    onChange={e=>setCustomVal(mem.id, e.target.value)}
+                    placeholder="0.00"
+                    style={{ width:90, textAlign:'right' }}
+                  />
+                </div>
+              ))}
+              <div style={{
+                display:'flex', justifyContent:'space-between', paddingTop:10,
+                borderTop:'1px solid #e2e8f0', fontSize:13, marginTop:4,
+              }}>
+                <span style={{ color:'#64748b' }}>Total entered: <strong style={{ color:'#1e293b' }}>{fmt(customTot)}</strong></span>
+                <span style={{ color: Math.abs(customDiff)<0.01 ? '#10b981':'#ef4444', fontWeight:600 }}>
+                  {Math.abs(customDiff)<0.01 ? '✓ Balanced' : customDiff>0 ? `Remaining: ${fmt(customDiff)}` : `Over by: ${fmt(-customDiff)}`}
+                </span>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      <div style={{ display:'flex', gap:10, justifyContent:'flex-end', paddingTop:16, borderTop:'1px solid #f1f5f9' }}>
+        <button onClick={onClose} style={{
+          padding:'10px 22px', border:'none', borderRadius:10,
+          background:'#f1f5f9', color:'#475569', fontWeight:600, cursor:'pointer', fontSize:14,
+        }}>Cancel</button>
+        <button onClick={handleSave} className="btn-primary" style={{
+          padding:'10px 22px', border:'none', borderRadius:10,
+          background:'linear-gradient(135deg,#6366f1,#8b5cf6)',
+          color:'#fff', fontWeight:600, cursor:'pointer', fontSize:14, transition:'all 0.15s',
+        }}>
+          {expense ? 'Update Expense' : 'Add Expense'}
+        </button>
+      </div>
+    </Modal>
+  );
+};
+
+/* ════════════════════ Settle Up Modal ════════════════════ */
+const SettleUpModal = ({ folder, onClose, onSettle }) => {
+  const fmt    = useFmt();
+  const bal    = computeBalances(folder);
+  const debts  = simplifyDebts(bal, folder.members);
+  const mmap   = Object.fromEntries(folder.members.map(m=>[m.id,m]));
+  const [from,   setFrom]   = useState(debts[0]?.from || '');
+  const [to,     setTo]     = useState(debts[0]?.to   || '');
+  const [amount, setAmount] = useState(debts[0]?.amount?.toString() || '');
+  const [note,   setNote]   = useState('');
+  const [error,  setError]  = useState('');
+
+  const pick = (debt) => { setFrom(debt.from); setTo(debt.to); setAmount(debt.amount.toString()); };
+
+  const handleSave = () => {
+    if (!from || !to || from===to) { setError('Select different people'); return; }
+    if (!(parseFloat(amount)>0))   { setError('Enter a valid amount'); return; }
+    onSettle({ from, to, amount:+parseFloat(amount).toFixed(2), note });
+    onClose();
+  };
+
+  return (
+    <Modal title="💸 Record Settlement" onClose={onClose}>
+      {error && <p style={{ color:'#ef4444', fontSize:13, marginBottom:12, background:'#fef2f2', padding:'8px 12px', borderRadius:8 }}>{error}</p>}
+
+      {debts.length > 0 && (
+        <div style={{ marginBottom:20 }}>
+          <Label>Suggested Payments</Label>
+          {debts.map((d,i) => (
+            <div key={i} className="debt-suggestion" onClick={() => pick(d)} style={{
+              display:'flex', justifyContent:'space-between', alignItems:'center',
+              padding:'11px 14px', background:'#f0fdf4', border:'1.5px solid #bbf7d0',
+              borderRadius:10, marginBottom:8, cursor:'pointer', transition:'background 0.15s',
+            }}>
+              <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                <Avatar name={mmap[d.from]?.name} color={mmap[d.from]?.color} size={26} />
+                <span style={{ fontSize:14, color:'#475569' }}>
+                  <strong style={{ color:'#1e293b' }}>{d.fromName}</strong>
+                  {' → '}
+                  <strong style={{ color:'#1e293b' }}>{d.toName}</strong>
+                </span>
+                <Avatar name={mmap[d.to]?.name} color={mmap[d.to]?.color} size={26} />
+              </div>
+              <span style={{ fontWeight:700, color:'#16a34a', fontSize:15 }}>{fmt(d.amount)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="form-row" style={{ display:'flex', gap:14, marginBottom:14 }}>
+        <div style={{ flex:1 }}>
+          <Label>From (pays)</Label>
+          <Select value={from} onChange={e=>setFrom(e.target.value)}>
+            <option value="">Select…</option>
+            {folder.members.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}
+          </Select>
+        </div>
+        <div style={{ flex:1 }}>
+          <Label>To (receives)</Label>
+          <Select value={to} onChange={e=>setTo(e.target.value)}>
+            <option value="">Select…</option>
+            {folder.members.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}
+          </Select>
+        </div>
+      </div>
+
+      <div style={{ marginBottom:14 }}>
+        <Label>Amount ($)</Label>
+        <Input type="number" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0.00" min="0" step="0.01" />
+      </div>
+
+      <div style={{ marginBottom:20 }}>
+        <Label>Note (optional)</Label>
+        <Input value={note} onChange={e=>setNote(e.target.value)} placeholder="e.g. Paid via Venmo / UPI / Cash" />
+      </div>
+
+      <div style={{ display:'flex', gap:10, justifyContent:'flex-end', paddingTop:16, borderTop:'1px solid #f1f5f9' }}>
+        <button onClick={onClose} style={{
+          padding:'10px 22px', border:'none', borderRadius:10,
+          background:'#f1f5f9', color:'#475569', fontWeight:600, cursor:'pointer', fontSize:14,
+        }}>Cancel</button>
+        <button onClick={handleSave} className="btn-primary" style={{
+          padding:'10px 22px', border:'none', borderRadius:10,
+          background:'linear-gradient(135deg,#10b981,#059669)',
+          color:'#fff', fontWeight:600, cursor:'pointer', fontSize:14, transition:'all 0.15s',
+        }}>Record Payment</button>
+      </div>
+    </Modal>
+  );
+};
+
+/* ════════════════════ Manage Members Modal ════════════════════ */
+const ManageMembersModal = ({ folder, onClose, onUpdate }) => {
+  const [members, setMembers] = useState(folder.members.map(m=>({...m})));
+  const [error,   setError]   = useState('');
+
+  /** Returns true if a member is referenced in any expense or settlement */
+  const isReferenced = (id) =>
+    folder.expenses.some(e => e.paidBy===id || e.splits.some(s=>s.memberId===id)) ||
+    folder.settlements.some(s => s.from===id || s.to===id);
+
+  const addMember  = () => setMembers(p=>[...p,{id:uid(),name:'',color:MEMBER_COLORS[p.length%MEMBER_COLORS.length]}]);
+  const upd        = (id,name) => setMembers(p=>p.map(m=>m.id===id?{...m,name}:m));
+  const rem        = (id) => {
+    if (isReferenced(id)) { setError('Cannot remove a member who has expenses or settlements — delete their expenses first.'); return; }
+    setMembers(p=>p.length>2?p.filter(m=>m.id!==id):p);
+  };
+
+  const handleSave = () => {
+    const valid = members.filter(m=>m.name.trim());
+    if (valid.length < 2) { setError('At least 2 members required'); return; }
+    onUpdate(valid); onClose();
+  };
+
+  return (
+    <Modal title="👥 Manage Members" onClose={onClose}>
+      {error && <p style={{ color:'#ef4444', fontSize:13, marginBottom:12, background:'#fef2f2', padding:'8px 12px', borderRadius:8 }}>{error}</p>}
+      {members.map((m,i)=>{
+        const ref = isReferenced(m.id);
+        return (
+          <div key={m.id} style={{ display:'flex', gap:8, alignItems:'center', marginBottom:8 }}>
+            <Avatar name={m.name||'?'} color={m.color} size={32} />
+            <Input value={m.name} onChange={e=>upd(m.id,e.target.value)} placeholder={`Member ${i+1}`} style={{flex:1}} />
+            {members.length>2&&(
+              <button onClick={()=>rem(m.id)} className="icon-btn" title={ref?'Has expenses — cannot remove':'Remove member'} style={{
+                background:'none',border:'none',cursor: ref?'not-allowed':'pointer',
+                color: ref?'#d1d5db':'#94a3b8',fontSize:18,padding:'0 4px',
+              }}>✕</button>
+            )}
+          </div>
+        );
+      })}
+      <button onClick={addMember} style={{
+        width:'100%',padding:'9px',border:'1.5px dashed #d1d5db',
+        borderRadius:10,background:'none',color:'#6366f1',
+        fontSize:13,fontWeight:600,cursor:'pointer',marginTop:4,marginBottom:16,
+      }}>+ Add Member</button>
+      <div style={{display:'flex',gap:10,justifyContent:'flex-end',paddingTop:16,borderTop:'1px solid #f1f5f9'}}>
+        <button onClick={onClose} style={{padding:'10px 22px',border:'none',borderRadius:10,background:'#f1f5f9',color:'#475569',fontWeight:600,cursor:'pointer',fontSize:14}}>Cancel</button>
+        <button onClick={handleSave} className="btn-primary" style={{padding:'10px 22px',border:'none',borderRadius:10,background:'linear-gradient(135deg,#6366f1,#8b5cf6)',color:'#fff',fontWeight:600,cursor:'pointer',fontSize:14,transition:'all 0.15s'}}>Save</button>
+      </div>
+    </Modal>
+  );
+};
+
+/* ════════════════════ Expense Item ════════════════════ */
+const ExpenseItem = ({ expense, folder, onEdit, onDelete }) => {
+  const fmt    = useFmt();
+  const [open, setOpen] = useState(false);
+  const mmap = Object.fromEntries(folder.members.map(m=>[m.id,m]));
+  const payer = mmap[expense.paidBy];
+
+  return (
+    <div className="expense-item" style={{
+      border:'1px solid #e2e8f0', borderRadius:12, overflow:'hidden',
+      transition:'background 0.15s', marginBottom:8,
+    }}>
+      <div
+        onClick={()=>setOpen(o=>!o)}
+        style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'14px 16px', cursor:'pointer' }}
+      >
+        <div style={{ display:'flex', gap:12, alignItems:'center', flex:1, minWidth:0 }}>
+          <div style={{
+            width:42, height:42, borderRadius:10,
+            background: `${payer?.color || '#6366f1'}18`,
+            display:'flex', alignItems:'center', justifyContent:'center', fontSize:22, flexShrink:0,
+          }}>
+            {catIcon(expense.category)}
+          </div>
+          <div style={{ minWidth:0 }}>
+            <div style={{ fontSize:15, fontWeight:600, color:'#1e293b', marginBottom:3, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+              {expense.description}
+            </div>
+            <div style={{ display:'flex', gap:6, alignItems:'center', flexWrap:'wrap' }}>
+              <span style={{
+                background: payer?.color||'#6366f1', color:'#fff',
+                borderRadius:20, padding:'1px 8px', fontSize:11, fontWeight:700,
+              }}>{payer?.name||'?'}</span>
+              <span style={{ fontSize:12, color:'#94a3b8' }}>{fmtDate(expense.date)}</span>
+              <span style={{
+                fontSize:11, color:'#64748b', background:'#f1f5f9',
+                borderRadius:6, padding:'1px 7px',
+              }}>{expense.category}</span>
+            </div>
+          </div>
+        </div>
+        <div style={{ display:'flex', alignItems:'center', gap:8, flexShrink:0, marginLeft:12 }}>
+          <span style={{ fontSize:18, fontWeight:700, color:'#1e293b' }}>{fmt(expense.amount)}</span>
+          <button onClick={e=>{e.stopPropagation();onEdit();}} className="icon-btn" style={{
+            background:'none',border:'none',cursor:'pointer',fontSize:15,
+            padding:'4px 6px',borderRadius:6,color:'#64748b',
+          }}>✏️</button>
+          <button onClick={e=>{e.stopPropagation();onDelete();}} className="icon-btn" style={{
+            background:'none',border:'none',cursor:'pointer',fontSize:15,
+            padding:'4px 6px',borderRadius:6,color:'#64748b',
+          }}>🗑️</button>
+          <span style={{ color:'#94a3b8', fontSize:14 }}>{open?'▲':'▼'}</span>
+        </div>
+      </div>
+
+      {open && (
+        <div style={{ background:'#f8fafc', borderTop:'1px solid #f1f5f9', padding:'12px 16px' }}>
+          <p style={{ fontSize:12, fontWeight:700, color:'#94a3b8', textTransform:'uppercase', letterSpacing:0.5, marginBottom:8 }}>Split Details</p>
+          {expense.splits.map(sp => {
+            const mem = mmap[sp.memberId];
+            return (
+              <div key={sp.memberId} style={{ display:'flex', alignItems:'center', gap:8, marginBottom:6 }}>
+                <Avatar name={mem?.name} color={mem?.color} size={24} />
+                <span style={{ flex:1, fontSize:13, color:'#475569' }}>{mem?.name}</span>
+                <span style={{ fontSize:13, fontWeight:700, color:'#1e293b' }}>{fmt(sp.amount)}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* ════════════════════ Expenses Tab ════════════════════ */
+const ExpensesTab = ({ folder, onAddExpense, onEditExpense, onDeleteExpense }) => {
+  const sorted = [...folder.expenses].sort((a,b) => new Date(b.date)-new Date(a.date));
+
+  return (
+    <div>
+      <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:16 }}>
+        <button onClick={onAddExpense} className="btn-primary" style={{
+          padding:'10px 20px', border:'none', borderRadius:10,
+          background:'linear-gradient(135deg,#6366f1,#8b5cf6)',
+          color:'#fff', fontWeight:600, cursor:'pointer', fontSize:14, transition:'all 0.15s',
+        }}>+ Add Expense</button>
+      </div>
+      {sorted.length===0
+        ? <div style={{ textAlign:'center', padding:'48px 0', color:'#94a3b8', fontSize:15 }}>
+            <div style={{ fontSize:48, marginBottom:12 }}>🧾</div>
+            No expenses yet. Add one!
+          </div>
+        : sorted.map(exp => (
+            <ExpenseItem
+              key={exp.id}
+              expense={exp}
+              folder={folder}
+              onEdit={()=>onEditExpense(exp)}
+              onDelete={()=>onDeleteExpense(exp.id)}
+            />
+          ))
+      }
+    </div>
+  );
+};
+
+/* ════════════════════ Balances Tab ════════════════════ */
+const BalancesTab = ({ folder, onSettleUp }) => {
+  const fmt    = useFmt();
+  const bal    = computeBalances(folder);
+  const debts  = simplifyDebts(bal, folder.members);
+  const settled= isSettled(folder);
+  const mmap   = Object.fromEntries(folder.members.map(m=>[m.id,m]));
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:24 }}>
+
+      {/* Per-member balances */}
+      <div>
+        <h3 style={{ fontSize:15, fontWeight:700, color:'#1e293b', marginBottom:14 }}>Member Balances</h3>
+        {folder.members.map(m => {
+          const b = bal[m.id]||0;
+          const isPos = b >  0.005;
+          const isNeg = b < -0.005;
+          return (
+            <div key={m.id} style={{
+              display:'flex', alignItems:'center', gap:12,
+              padding:'11px 0', borderBottom:'1px solid #f1f5f9',
+            }}>
+              <Avatar name={m.name} color={m.color} size={36} />
+              <span style={{ flex:1, fontSize:14, fontWeight:600, color:'#1e293b' }}>{m.name}</span>
+              <div style={{ textAlign:'right' }}>
+                <div style={{
+                  fontSize:15, fontWeight:700,
+                  color: isPos?'#10b981':isNeg?'#ef4444':'#64748b',
+                }}>
+                  {isPos ? `+${fmt(b)}` : isNeg ? `-${fmt(b)}` : '—'}
+                </div>
+                <div style={{ fontSize:12, color:'#94a3b8' }}>
+                  {isPos?'gets back':isNeg?'owes':'settled'}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Debt simplification */}
+      {!settled && debts.length>0 && (
+        <div>
+          <h3 style={{ fontSize:15, fontWeight:700, color:'#1e293b', marginBottom:14 }}>Suggested Payments</h3>
+          {debts.map((d,i)=>(
+            <div key={i} style={{
+              display:'flex', alignItems:'center', gap:10,
+              padding:'10px 14px', background:'#fef3c7', borderRadius:10,
+              marginBottom:8, border:'1px solid #fde68a',
+            }}>
+              <Avatar name={mmap[d.from]?.name} color={mmap[d.from]?.color} size={28} />
+              <span style={{ flex:1, fontSize:14, color:'#92400e' }}>
+                <strong>{d.fromName}</strong> owes <strong>{d.toName}</strong>
+              </span>
+              <Avatar name={mmap[d.to]?.name} color={mmap[d.to]?.color} size={28} />
+              <span style={{ fontWeight:700, color:'#b45309', fontSize:15, marginLeft:6 }}>{fmt(d.amount)}</span>
+            </div>
+          ))}
+          <button onClick={onSettleUp} className="btn-primary" style={{
+            width:'100%', padding:'12px', border:'none', borderRadius:10,
+            background:'linear-gradient(135deg,#10b981,#059669)',
+            color:'#fff', fontWeight:700, cursor:'pointer', fontSize:15,
+            marginTop:8, transition:'all 0.15s',
+          }}>💸 Record Settlement</button>
+        </div>
+      )}
+
+      {/* Fully settled badge */}
+      {settled && (
+        <div style={{
+          textAlign:'center', padding:'32px', background:'#f0fdf4',
+          borderRadius:14, border:'1px solid #bbf7d0',
+        }}>
+          <div style={{ fontSize:48, marginBottom:8, animation:'popIn 0.4s ease' }}>🎉</div>
+          <p style={{ fontSize:17, fontWeight:700, color:'#16a34a', margin:0 }}>All settled up!</p>
+          <p style={{ fontSize:13, color:'#86efac', marginTop:4 }}>Every expense has been paid.</p>
+        </div>
+      )}
+
+      {/* Settlement history */}
+      {folder.settlements.length>0 && (
+        <div>
+          <h3 style={{ fontSize:15, fontWeight:700, color:'#1e293b', marginBottom:14 }}>Settlement History</h3>
+          {[...folder.settlements].reverse().map(s=>(
+            <div key={s.id} style={{
+              display:'flex', justifyContent:'space-between', alignItems:'center',
+              padding:'10px 0', borderBottom:'1px solid #f1f5f9', gap:8, flexWrap:'wrap',
+            }}>
+              <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                <Avatar name={mmap[s.from]?.name} color={mmap[s.from]?.color} size={26} />
+                <span style={{ fontSize:13, color:'#475569' }}>
+                  <strong>{mmap[s.from]?.name}</strong> paid <strong>{mmap[s.to]?.name}</strong>
+                  {s.note && <span style={{ color:'#94a3b8' }}> · {s.note}</span>}
+                </span>
+              </div>
+              <span style={{ fontSize:13, color:'#94a3b8', whiteSpace:'nowrap' }}>
+                {fmt(s.amount)} · {fmtDate(s.date)}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* ════════════════════ Analytics Tab ════════════════════ */
+const AnalyticsTab = ({ folder }) => {
+  const fmt       = useFmt();
+  const mmap      = Object.fromEntries(folder.members.map(m=>[m.id,m]));
+  const expenses  = folder.expenses;
+  const totalSpent= expenses.reduce((s,e)=>s+e.amount, 0);
+
+  if (expenses.length===0) return (
+    <div style={{ textAlign:'center', padding:'48px 0', color:'#94a3b8' }}>
+      <div style={{ fontSize:48, marginBottom:12 }}>📊</div>
+      Add some expenses to see analytics!
+    </div>
+  );
+
+  /* per-person data */
+  const personData = folder.members.map(m => ({
+    name: m.name,
+    Paid: +expenses.filter(e=>e.paidBy===m.id).reduce((s,e)=>s+e.amount,0).toFixed(2),
+    Share: +expenses.reduce((s,e)=>{ const sp=e.splits.find(x=>x.memberId===m.id); return s+(sp?sp.amount:0); },0).toFixed(2),
+  }));
+
+  /* category data */
+  const catTotals = {};
+  expenses.forEach(e => { catTotals[e.category] = (catTotals[e.category]||0)+e.amount; });
+  const catData = Object.entries(catTotals).map(([name,value])=>({ name, value:+value.toFixed(2) }));
+
+  /* time-series */
+  const timeMap = {};
+  expenses.forEach(e => { const mo=e.date.slice(0,7); timeMap[mo]=(timeMap[mo]||0)+e.amount; });
+  const timeData = Object.entries(timeMap).sort(([a],[b])=>a.localeCompare(b)).map(([mo,amount])=>({
+    month: new Date(mo+'-15').toLocaleDateString('en-US',{month:'short',year:'2-digit'}),
+    amount: +amount.toFixed(2),
+  }));
+
+  /* largest single expense */
+  const topExp = expenses.reduce((max,e)=>e.amount>max.amount?e:max, expenses[0]);
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:24 }}>
+
+      {/* Summary cards */}
+      <div className="summary-cards" style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:14 }}>
+        {[
+          { value: fmt(totalSpent),                            label:'Total Spent',     emoji:'💰' },
+          { value: expenses.length,                            label:'Expenses',        emoji:'🧾' },
+          { value: fmt(totalSpent/Math.max(folder.members.length,1)), label:'Per Person', emoji:'👤' },
+        ].map(c=>(
+          <div key={c.label} style={{
+            background:'linear-gradient(135deg,#6366f1,#8b5cf6)',
+            borderRadius:14, padding:'18px 14px', textAlign:'center', color:'#fff',
+          }}>
+            <div style={{ fontSize:28, marginBottom:4 }}>{c.emoji}</div>
+            <div style={{ fontSize:22, fontWeight:700, marginBottom:2 }}>{c.value}</div>
+            <div style={{ fontSize:12, opacity:0.85 }}>{c.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Largest expense callout */}
+      <div style={{
+        background:'#fef9c3', border:'1px solid #fde68a',
+        borderRadius:12, padding:'14px 18px',
+        display:'flex', alignItems:'center', gap:12,
+      }}>
+        <span style={{ fontSize:28 }}>🏆</span>
+        <div>
+          <p style={{ fontSize:12, color:'#92400e', fontWeight:600, margin:'0 0 2px' }}>BIGGEST EXPENSE</p>
+          <p style={{ fontSize:15, fontWeight:700, color:'#78350f', margin:0 }}>
+            {topExp.description} — {fmt(topExp.amount)}
+            <span style={{ fontWeight:400, color:'#b45309', fontSize:13 }}> paid by {mmap[topExp.paidBy]?.name}</span>
+          </p>
+        </div>
+      </div>
+
+      {/* Per person bar chart */}
+      <div style={{ background:'#fff', borderRadius:14, border:'1px solid #e2e8f0', padding:'20px' }}>
+        <h3 style={{ fontSize:15, fontWeight:700, color:'#1e293b', marginBottom:16, marginTop:0 }}>Paid vs. Share per Person</h3>
+        <ResponsiveContainer width="100%" height={240}>
+          <BarChart data={personData} margin={{top:4,right:16,left:4,bottom:4}}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+            <XAxis dataKey="name" tick={{fontSize:12}} />
+            <YAxis tick={{fontSize:12}} tickFormatter={v=>`$${v}`} />
+            <Tooltip formatter={v=>fmt(v)} />
+            <Legend />
+            <Bar dataKey="Paid"  fill="#6366f1" radius={[5,5,0,0]} />
+            <Bar dataKey="Share" fill="#f59e0b" radius={[5,5,0,0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* Category donut */}
+      {catData.length > 0 && (
+        <div style={{ background:'#fff', borderRadius:14, border:'1px solid #e2e8f0', padding:'20px' }}>
+          <h3 style={{ fontSize:15, fontWeight:700, color:'#1e293b', marginBottom:16, marginTop:0 }}>Expenses by Category</h3>
+          <ResponsiveContainer width="100%" height={260}>
+            <PieChart>
+              <Pie
+                data={catData} cx="50%" cy="50%"
+                innerRadius={68} outerRadius={110}
+                paddingAngle={3} dataKey="value"
+                label={({name,percent})=>`${name} ${(percent*100).toFixed(0)}%`}
+                labelLine={true}
+              >
+                {catData.map((_,i)=><Cell key={i} fill={CHART_COLORS[i%CHART_COLORS.length]} />)}
+              </Pie>
+              <Tooltip formatter={v=>fmt(v)} />
+            </PieChart>
+          </ResponsiveContainer>
+          {/* legend */}
+          <div style={{ display:'flex', flexWrap:'wrap', gap:10, justifyContent:'center', marginTop:8 }}>
+            {catData.map((c,i)=>(
+              <div key={c.name} style={{ display:'flex', alignItems:'center', gap:5, fontSize:12, color:'#475569' }}>
+                <div style={{ width:10,height:10,borderRadius:2,background:CHART_COLORS[i%CHART_COLORS.length] }} />
+                {c.name}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Spending over time */}
+      {timeData.length > 1 && (
+        <div style={{ background:'#fff', borderRadius:14, border:'1px solid #e2e8f0', padding:'20px' }}>
+          <h3 style={{ fontSize:15, fontWeight:700, color:'#1e293b', marginBottom:16, marginTop:0 }}>Spending Over Time</h3>
+          <ResponsiveContainer width="100%" height={200}>
+            <LineChart data={timeData} margin={{top:4,right:16,left:4,bottom:4}}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+              <XAxis dataKey="month" tick={{fontSize:12}} />
+              <YAxis tick={{fontSize:12}} tickFormatter={v=>`$${v}`} />
+              <Tooltip formatter={v=>fmt(v)} />
+              <Line type="monotone" dataKey="amount" stroke="#6366f1" strokeWidth={2.5} dot={{fill:'#6366f1',r:4}} />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* ════════════════════ Folder View (detail page) ════════════════════ */
+const FolderView = ({ folder, onBack, onUpdate, onAddExpense, onEditExpense, onDeleteExpense, onAddSettlement, onDeleteFolder }) => {
+  const fmt                    = useFmt();
+  const [tab, setTab]          = useState('expenses');
+  const [showMembers,   setShowMembers]   = useState(false);
+  const [showSettle,    setShowSettle]    = useState(false);
+  const [showEditFolder,setShowEditFolder]= useState(false);
+  const [addExpOpen,    setAddExpOpen]    = useState(false);
+  const [editExpense,   setEditExpense]   = useState(null);
+  const [delConfirm,    setDelConfirm]    = useState(false);
+  const settled = isSettled(folder);
+  const totalSpent = folder.expenses.reduce((s,e)=>s+e.amount, 0);
+
+  const handleAddExpense = (exp) => { onAddExpense(exp); setAddExpOpen(false); };
+  const handleEditExpense = (exp) => { onEditExpense(editExpense.id, exp); setEditExpense(null); };
+
+  return (
+    <div>
+      {/* Page header */}
+      <div style={{
+        background:'#fff', borderRadius:16, boxShadow:'0 1px 4px rgba(0,0,0,0.08)',
+        marginBottom:16, overflow:'hidden',
+        borderTop:`5px solid ${folder.color}`,
+      }}>
+        <div style={{ padding:'20px 24px', display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:12, flexWrap:'wrap' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:14 }}>
+            <span style={{ fontSize:44 }}>{folder.icon}</span>
+            <div>
+              <h1 style={{ fontSize:22, fontWeight:800, color:'#1e293b', margin:'0 0 4px' }}>{folder.name}</h1>
+              <p style={{ fontSize:13, color:'#64748b', margin:0 }}>
+                {folder.members.length} members · {folder.expenses.length} expenses · {fmt(totalSpent)} total
+                {settled && <span style={{ marginLeft:8, background:'#dcfce7', color:'#16a34a', borderRadius:20, padding:'1px 10px', fontSize:12, fontWeight:700 }}>✓ All settled</span>}
+              </p>
+            </div>
+          </div>
+          <div className="folder-header-actions" style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+            <button onClick={()=>setShowEditFolder(true)} style={{
+              padding:'9px 16px', border:'1.5px solid #e2e8f0', borderRadius:10,
+              background:'#f8fafc', color:'#475569', fontWeight:600, cursor:'pointer', fontSize:13,
+            }}>✏️ Edit</button>
+            <button onClick={()=>setShowMembers(true)} style={{
+              padding:'9px 16px', border:'1.5px solid #e2e8f0', borderRadius:10,
+              background:'#f8fafc', color:'#475569', fontWeight:600, cursor:'pointer', fontSize:13,
+            }}>👥 Members</button>
+            {!settled && (
+              <button onClick={()=>setShowSettle(true)} style={{
+                padding:'9px 16px', border:'none', borderRadius:10,
+                background:'linear-gradient(135deg,#10b981,#059669)',
+                color:'#fff', fontWeight:600, cursor:'pointer', fontSize:13,
+              }}>💸 Settle Up</button>
+            )}
+            {settled && !delConfirm && (
+              <button onClick={()=>setDelConfirm(true)} className="btn-danger" style={{
+                padding:'9px 16px', border:'none', borderRadius:10,
+                background:'#fee2e2', color:'#ef4444', fontWeight:600, cursor:'pointer', fontSize:13,
+              }}>🗑️ Delete Folder</button>
+            )}
+            {delConfirm && (
+              <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                <span style={{ fontSize:13, color:'#ef4444', fontWeight:600 }}>Sure?</span>
+                <button onClick={onDeleteFolder} style={{ padding:'8px 14px', border:'none', borderRadius:8, background:'#ef4444', color:'#fff', fontWeight:700, cursor:'pointer', fontSize:13 }}>Delete</button>
+                <button onClick={()=>setDelConfirm(false)} style={{ padding:'8px 14px', border:'none', borderRadius:8, background:'#f1f5f9', color:'#475569', fontWeight:600, cursor:'pointer', fontSize:13 }}>Cancel</button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Member avatars strip */}
+        <div style={{ borderTop:'1px solid #f1f5f9', padding:'10px 24px', display:'flex', gap:6 }}>
+          {folder.members.map(m=>(
+            <div key={m.id} style={{ display:'flex', alignItems:'center', gap:4 }}>
+              <Avatar name={m.name} color={m.color} size={28} />
+              <span style={{ fontSize:12, color:'#64748b' }}>{m.name}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* Tabs */}
+        <div style={{ display:'flex', borderTop:'1px solid #f1f5f9', padding:'0 16px' }}>
+          {[['expenses','📋 Expenses'],['balances','⚖️ Balances'],['analytics','📊 Analytics']].map(([key,label])=>(
+            <button key={key} className="tab-btn" onClick={()=>setTab(key)} style={{
+              background:'none', border:'none', borderBottom:`3px solid ${tab===key?'#6366f1':'transparent'}`,
+              padding:'12px 16px', fontSize:14, fontWeight:600, cursor:'pointer',
+              color: tab===key ? '#6366f1':'#64748b',
+              marginBottom:'-1px', transition:'color 0.15s',
+            }}>{label}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* Tab content */}
+      <div style={{ background:'#fff', borderRadius:16, boxShadow:'0 1px 4px rgba(0,0,0,0.08)', padding:'24px' }}>
+        {tab==='expenses' && (
+          <ExpensesTab
+            folder={folder}
+            onAddExpense={()=>setAddExpOpen(true)}
+            onEditExpense={(exp)=>setEditExpense(exp)}
+            onDeleteExpense={onDeleteExpense}
+          />
+        )}
+        {tab==='balances' && <BalancesTab folder={folder} onSettleUp={()=>setShowSettle(true)} />}
+        {tab==='analytics' && <AnalyticsTab folder={folder} />}
+      </div>
+
+      {/* Modals */}
+      {showEditFolder && (
+        <AddFolderModal
+          existing={folder}
+          onClose={()=>setShowEditFolder(false)}
+          onSave={(data)=>{ onUpdate({ name:data.name, icon:data.icon, color:data.color }); setShowEditFolder(false); }}
+        />
+      )}
+      {showMembers && (
+        <ManageMembersModal
+          folder={folder}
+          onClose={()=>setShowMembers(false)}
+          onUpdate={(members)=>{ onUpdate({members}); setShowMembers(false); }}
+        />
+      )}
+      {showSettle && (
+        <SettleUpModal
+          folder={folder}
+          onClose={()=>setShowSettle(false)}
+          onSettle={(s)=>{ onAddSettlement(s); setShowSettle(false); }}
+        />
+      )}
+      {addExpOpen && (
+        <AddExpenseModal
+          folder={folder}
+          onClose={()=>setAddExpOpen(false)}
+          onSave={handleAddExpense}
+        />
+      )}
+      {editExpense && (
+        <AddExpenseModal
+          folder={folder}
+          expense={editExpense}
+          onClose={()=>setEditExpense(null)}
+          onSave={handleEditExpense}
+        />
+      )}
+    </div>
+  );
+};
+
+/* ════════════════════ Home View ════════════════════ */
+const HomeView = ({ folders, onSelectFolder, onDeleteFolder }) => {
+  const fmt            = useFmt();
+  const totalFolders   = folders.length;
+  const totalExpenses  = folders.reduce((s,f)=>s+f.expenses.reduce((ss,e)=>ss+e.amount,0), 0);
+  const settledFolders = folders.filter(isSettled).length;
+
+  if (folders.length===0) return (
+    <div style={{ textAlign:'center', padding:'80px 20px' }}>
+      <div style={{ fontSize:80, marginBottom:16 }}>💸</div>
+      <h2 style={{ fontSize:28, fontWeight:800, color:'#1e293b', marginBottom:8 }}>Welcome to SplitEase</h2>
+      <p style={{ fontSize:16, color:'#64748b', maxWidth:380, margin:'0 auto 24px' }}>
+        Track shared expenses with friends, family, or colleagues. Create a folder to get started.
+      </p>
+    </div>
+  );
+
+  return (
+    <div>
+      {/* Quick stats */}
+      {folders.length>0 && (
+        <div style={{ display:'flex', gap:12, marginBottom:24, flexWrap:'wrap' }}>
+          {[
+            { v:totalFolders,     l:'Total Folders',   e:'📂', c:'#6366f1' },
+            { v:fmt(totalExpenses),l:'Total Tracked',  e:'💰', c:'#10b981' },
+            { v:settledFolders,   l:'Fully Settled',   e:'✅', c:'#f59e0b' },
+          ].map(s=>(
+            <div key={s.l} style={{
+              flex:'1 1 130px', background:'#fff', borderRadius:14,
+              padding:'16px 18px', boxShadow:'0 1px 4px rgba(0,0,0,0.06)',
+              borderLeft:`4px solid ${s.c}`,
+            }}>
+              <div style={{ fontSize:24, marginBottom:4 }}>{s.e}</div>
+              <div style={{ fontSize:22, fontWeight:800, color:'#1e293b' }}>{s.v}</div>
+              <div style={{ fontSize:12, color:'#64748b' }}>{s.l}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="folder-grid" style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(290px,1fr))', gap:18 }}>
+        {folders.map(f=><FolderCard key={f.id} folder={f} onClick={()=>onSelectFolder(f.id)} onDelete={()=>onDeleteFolder(f.id)} />)}
+      </div>
+    </div>
+  );
+};
+
+/* ─── Folder Card ─── */
+const FolderCard = ({ folder, onClick, onDelete }) => {
+  const fmt        = useFmt();
+  const [delConfirm, setDelConfirm] = useState(false);
+  const settled    = isSettled(folder);
+  const totalSpent = folder.expenses.reduce((s,e)=>s+e.amount, 0);
+  const bal        = computeBalances(folder);
+  const maxOwed    = Math.max(...folder.members.map(m=>Math.abs(bal[m.id]||0)));
+
+  return (
+    <div className="folder-card" style={{
+      background:'#fff', borderRadius:16, overflow:'hidden',
+      boxShadow:'0 2px 8px rgba(0,0,0,0.07)',
+      transition:'all 0.2s ease', cursor:'pointer',
+      borderTop:`5px solid ${folder.color}`,
+    }}>
+      <div onClick={onClick} style={{ padding:'18px 20px' }}>
+        <div style={{ display:'flex', alignItems:'flex-start', gap:12, marginBottom:14 }}>
+          <span style={{ fontSize:34 }}>{folder.icon}</span>
+          <div style={{ flex:1 }}>
+            <h3 style={{ fontSize:17, fontWeight:700, color:'#1e293b', margin:'0 0 3px' }}>{folder.name}</h3>
+            <p style={{ fontSize:12, color:'#94a3b8', margin:0 }}>
+              {folder.members.length} people · {folder.expenses.length} expenses
+            </p>
+          </div>
+          {settled && (
+            <span style={{ background:'#dcfce7', color:'#16a34a', borderRadius:20, padding:'2px 10px', fontSize:11, fontWeight:700, whiteSpace:'nowrap' }}>✓ Settled</span>
+          )}
+        </div>
+
+        {/* Total */}
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14 }}>
+          <span style={{ fontSize:12, color:'#94a3b8' }}>Total spent</span>
+          <span style={{ fontSize:24, fontWeight:800, color:'#1e293b' }}>{fmt(totalSpent)}</span>
+        </div>
+
+        {/* Balance bar */}
+        {!settled && maxOwed>0 && (
+          <div style={{ marginBottom:14 }}>
+            <div style={{ fontSize:11, color:'#94a3b8', marginBottom:4 }}>Max pending: {fmt(maxOwed)}</div>
+            <div style={{ height:5, background:'#f1f5f9', borderRadius:99 }}>
+              <div style={{ height:'100%', width:`${Math.min(100,(maxOwed/totalSpent)*100)}%`, background:'linear-gradient(90deg,#f59e0b,#ef4444)', borderRadius:99 }} />
+            </div>
+          </div>
+        )}
+
+        {/* Member avatars */}
+        <div style={{ display:'flex' }}>
+          {folder.members.slice(0,6).map(m=>(
+            <Avatar key={m.id} name={m.name} color={m.color} size={30} style={{ marginRight:-6, boxShadow:'0 0 0 2px #fff' }} />
+          ))}
+          {folder.members.length>6&&(
+            <div style={{
+              width:30,height:30,borderRadius:'50%',background:'#94a3b8',
+              display:'flex',alignItems:'center',justifyContent:'center',
+              fontSize:11,fontWeight:700,color:'#fff',flexShrink:0,
+              border:'2px solid #fff',
+            }}>+{folder.members.length-6}</div>
+          )}
+        </div>
+      </div>
+
+      {/* Delete (only when settled) */}
+      {settled && (
+        <div style={{ borderTop:'1px solid #f1f5f9', padding:'10px 20px' }}>
+          {!delConfirm ? (
+            <button onClick={e=>{e.stopPropagation();setDelConfirm(true);}} style={{
+              width:'100%', padding:'8px', border:'none', borderRadius:8,
+              background:'#fee2e2', color:'#ef4444', fontWeight:600, cursor:'pointer', fontSize:13,
+            }}>🗑️ Delete Folder</button>
+          ) : (
+            <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+              <span style={{ flex:1, fontSize:12, color:'#ef4444', fontWeight:600 }}>Delete permanently?</span>
+              <button onClick={e=>{e.stopPropagation();onDelete();}} style={{ padding:'6px 12px',border:'none',borderRadius:7,background:'#ef4444',color:'#fff',fontWeight:700,cursor:'pointer',fontSize:12 }}>Yes</button>
+              <button onClick={e=>{e.stopPropagation();setDelConfirm(false);}} style={{ padding:'6px 12px',border:'none',borderRadius:7,background:'#f1f5f9',color:'#64748b',fontWeight:600,cursor:'pointer',fontSize:12 }}>No</button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* ════════════════════ Root App ════════════════════ */
+const App = () => {
+  const [store,    setStore]    = useState(loadStore);
+  const [page,     setPage]     = useState('home');   // 'home' | 'folder'
+  const [folderId, setFolderId] = useState(null);
+  const [showAdd,  setShowAdd]  = useState(false);
+  const [toast,    setToast]    = useState(null);
+
+  useEffect(() => { saveStore(store); }, [store]);
+
+  const notify = (msg, type='success') => {
+    setToast({ msg, type });
+    setTimeout(()=>setToast(null), 3000);
+  };
+
+  const folder = store.folders.find(f=>f.id===folderId);
+
+  /* ── Currency ── */
+  const currencyCode = store.currency || 'USD';
+  const currencySymbol = CURRENCIES.find(c=>c.code===currencyCode)?.symbol || '$';
+  const setCurrency = (code) => setStore(p=>({...p, currency:code}));
+
+  /* ── Folder CRUD ── */
+  const createFolder = (data) => {
+    setStore(p=>({...p, folders:[...p.folders, {...data, id:uid(), expenses:[], settlements:[], createdAt:Date.now()}]}));
+    notify('Folder created!');
+  };
+  const updateFolder = (id, patch) =>
+    setStore(p=>({...p, folders:p.folders.map(f=>f.id===id?{...f,...patch}:f)}));
+  const deleteFolder = (id) => {
+    setStore(p=>({...p, folders:p.folders.filter(f=>f.id!==id)}));
+    setPage('home'); setFolderId(null);
+    notify('Folder deleted');
+  };
+
+  /* ── Expense CRUD ── */
+  const addExpense = (exp) =>
+    updateFolder(folderId, { expenses:[...folder.expenses, {...exp, id:uid()}] });
+  const editExpense = (expId, patch) =>
+    updateFolder(folderId, { expenses: folder.expenses.map(e=>e.id===expId?{...e,...patch}:e) });
+  const deleteExpense = (expId) =>
+    updateFolder(folderId, { expenses: folder.expenses.filter(e=>e.id!==expId) });
+
+  /* ── Settlement ── */
+  const addSettlement = (s) =>
+    updateFolder(folderId, { settlements:[...folder.settlements, {...s, id:uid(), date:new Date().toISOString().split('T')[0]}] });
+
+  return (
+    <CurrencyCtx.Provider value={currencySymbol}>
+    <div style={{ minHeight:'100vh', background:'#f0f4ff' }}>
+      <Toast msg={toast?.msg} type={toast?.type} />
+
+      {/* Header */}
+      <header style={{
+        background:'#fff', borderBottom:'1px solid #e2e8f0',
+        position:'sticky', top:0, zIndex:500,
+        boxShadow:'0 1px 4px rgba(99,102,241,0.07)',
+      }}>
+        <div style={{
+          maxWidth:960, margin:'0 auto', padding:'0 16px',
+          height:62, display:'flex', alignItems:'center', gap:12,
+        }}>
+          {page!=='home' && (
+            <button onClick={()=>{setPage('home');setFolderId(null);}} style={{
+              background:'none', border:'none', cursor:'pointer',
+              color:'#6366f1', fontWeight:700, fontSize:14, padding:'6px 10px 6px 0',
+            }}>← Back</button>
+          )}
+          <div style={{ display:'flex', alignItems:'center', gap:8, flex:1 }}>
+            <span style={{ fontSize:26 }}>💸</span>
+            <span style={{
+              fontSize:20, fontWeight:800,
+              background:'linear-gradient(135deg,#6366f1,#8b5cf6)',
+              WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent',
+            }}>SplitEase</span>
+            {page==='home' && (
+              <span style={{ fontSize:12, color:'#94a3b8', marginLeft:4, fontWeight:400 }}>
+                — shared expense tracker
+              </span>
+            )}
+          </div>
+          {/* Currency picker — always visible */}
+          <select
+            value={currencyCode}
+            onChange={e=>setCurrency(e.target.value)}
+            style={{
+              padding:'7px 10px', border:'1.5px solid #e2e8f0', borderRadius:8,
+              background:'#f8fafc', color:'#475569', fontWeight:600, fontSize:13,
+              cursor:'pointer', outline:'none',
+            }}
+            title="Change currency"
+          >
+            {CURRENCIES.map(c=>(
+              <option key={c.code} value={c.code}>{c.symbol} {c.code} — {c.name}</option>
+            ))}
+          </select>
+          {page==='home' && (
+            <button onClick={()=>setShowAdd(true)} className="btn-primary" style={{
+              padding:'9px 20px', border:'none', borderRadius:10,
+              background:'linear-gradient(135deg,#6366f1,#8b5cf6)',
+              color:'#fff', fontWeight:700, cursor:'pointer', fontSize:14,
+              transition:'all 0.15s',
+            }}>+ New Folder</button>
+          )}
+        </div>
+      </header>
+
+      {/* Main */}
+      <main style={{ maxWidth:960, margin:'0 auto', padding:'24px 16px' }}>
+        {page==='home' && (
+          <HomeView
+            folders={store.folders}
+            onSelectFolder={(id)=>{ setFolderId(id); setPage('folder'); }}
+            onDeleteFolder={deleteFolder}
+          />
+        )}
+        {page==='folder' && folder && (
+          <FolderView
+            folder={folder}
+            onBack={()=>{setPage('home');setFolderId(null);}}
+            onUpdate={(patch)=>updateFolder(folderId, patch)}
+            onAddExpense={addExpense}
+            onEditExpense={editExpense}
+            onDeleteExpense={deleteExpense}
+            onAddSettlement={addSettlement}
+            onDeleteFolder={()=>deleteFolder(folderId)}
+          />
+        )}
+      </main>
+
+      {/* Add Folder Modal */}
+      {showAdd && (
+        <AddFolderModal
+          onClose={()=>setShowAdd(false)}
+          onSave={(data)=>{ createFolder(data); setShowAdd(false); }}
+        />
+      )}
+    </div>
+    </CurrencyCtx.Provider>
+  );
+};
+
+/* ── Mount ── */
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
